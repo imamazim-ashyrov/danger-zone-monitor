@@ -8,6 +8,8 @@ import {
   getPersonDangerPoint,
   pointInsideRect,
 } from "./utils/geometry";
+import { db } from "./firebase";
+import { ref, set, onValue } from "firebase/database";
 import accident_signalization from "./assets/audio/accident_signalization.mp3";
 
 const VIDEO_WIDTH = 960;
@@ -17,6 +19,8 @@ const DANGER_RATIO_THRESHOLD = 0.01;
 const PROXIMITY_PX_THRESHOLD = 90;
 const PERSON_POINT_PADDING = 35;
 const ALERT_COOLDOWN_MS = 2500;
+
+const ROOM_ID = "home-room-1";
 
 const ZONE_TYPES = [
   { key: "socket", label: "Розетка" },
@@ -48,8 +52,51 @@ export default function App() {
   const [activeAlert, setActiveAlert] = useState(null);
   const [isDrawingMode, setIsDrawingMode] = useState(true);
 
+  const isMonitorMode =
+    new URLSearchParams(window.location.search).get("monitor") === "1";
+
   const { modelStatus, detections, startDetection, stopDetection } =
     usePersonDetector();
+
+  const sendRemoteAlert = async (message) => {
+    try {
+      await set(ref(db, `alerts/${ROOM_ID}`), {
+        message,
+        active: true,
+        time: Date.now(),
+      });
+    } catch (error) {
+      console.error("sendRemoteAlert error", error);
+    }
+  };
+
+  useEffect(() => {
+    if (!isMonitorMode) return;
+
+    const alertsRef = ref(db, `alerts/${ROOM_ID}`);
+    const unsubscribe = onValue(alertsRef, (snapshot) => {
+      const data = snapshot.val();
+      if (!data || !data.active) {
+        setActiveAlert(null);
+        return;
+      }
+
+      setActiveAlert(data.message);
+      setAlerts((prev) => [
+        {
+          id: `remote-${data.time}-${Math.random()}`,
+          message: data.message,
+          time: formatTime(new Date(data.time)),
+        },
+        ...prev,
+      ].slice(0, 15));
+      playAlertSound();
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [isMonitorMode]);
 
   useEffect(() => {
     return () => {
@@ -79,7 +126,7 @@ export default function App() {
     }
   };
 
-  const triggerAlert = (message) => {
+  const triggerAlert = (message, fromRemote = false) => {
     const now = Date.now();
 
     if (now - lastAlertRef.current < ALERT_COOLDOWN_MS) return;
@@ -95,6 +142,10 @@ export default function App() {
     setActiveAlert(item.message);
     setAlerts((prev) => [item, ...prev].slice(0, 15));
     playAlertSound();
+
+    if (!fromRemote && !isMonitorMode) {
+      sendRemoteAlert(message);
+    }
   };
 
   const evaluateDanger = (persons) => {
@@ -152,10 +203,25 @@ export default function App() {
     } else {
       setActiveAlert(null);
       activeAlertRef.current = null;
+
+      if (!isMonitorMode) {
+        set(ref(db, `alerts/${ROOM_ID}`), {
+          message: "",
+          active: false,
+          time: Date.now(),
+        }).catch((error) => {
+          console.error("clear remote alert error", error);
+        });
+      }
     }
   };
 
   const startCamera = async () => {
+    if (isMonitorMode) {
+      alert("Monitor mode: camera & detection отключены.");
+      return;
+    }
+
     try {
       if (!navigator.mediaDevices?.getUserMedia) {
         alert("Бул браузер камера API колдобойт.");
@@ -245,7 +311,11 @@ export default function App() {
             </div>
 
             <div className="mt-4 flex flex-wrap gap-3">
-              {!isCameraOn ? (
+              {isMonitorMode ? (
+                <span className="px-4 py-2 rounded-2xl bg-blue-500 text-white font-semibold">
+                  Monitor mode (текетүз сигнал угуп, камера жок)
+                </span>
+              ) : !isCameraOn ? (
                 <button
                   onClick={startCamera}
                   className="px-4 py-2 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold"
@@ -302,26 +372,32 @@ export default function App() {
               </span>
             </div>
 
-            <div className="relative aspect-video w-full overflow-hidden rounded-3xl bg-black border border-slate-800">
-              <video
-                ref={videoRef}
-                autoPlay
-                muted
-                playsInline
-                width={VIDEO_WIDTH}
-                height={VIDEO_HEIGHT}
-                className="absolute inset-0 h-full w-full object-fill transform scale-x-[-1]"
-              />
+            {isMonitorMode ? (
+              <div className="relative aspect-video w-full overflow-hidden rounded-3xl bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-400">
+                Монитор режим: видео агым жок, детекция жок. Текетүз Firebaseдан сигналдарды угат.
+              </div>
+            ) : (
+              <div className="relative aspect-video w-full overflow-hidden rounded-3xl bg-black border border-slate-800">
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  muted
+                  playsInline
+                  width={VIDEO_WIDTH}
+                  height={VIDEO_HEIGHT}
+                  className="absolute inset-0 h-full w-full object-fill transform scale-x-[-1]"
+                />
 
-              <ZoneCanvas
-                zones={zones}
-                detections={detections}
-                isDrawingMode={isDrawingMode}
-                selectedZoneType={selectedZoneType}
-                onAddZone={(zone) => setZones((prev) => [...prev, zone])}
-                zoneTypes={ZONE_TYPES}
-              />
-            </div>
+                <ZoneCanvas
+                  zones={zones}
+                  detections={detections}
+                  isDrawingMode={isDrawingMode}
+                  selectedZoneType={selectedZoneType}
+                  onAddZone={(zone) => setZones((prev) => [...prev, zone])}
+                  zoneTypes={ZONE_TYPES}
+                />
+              </div>
+            )}
           </div>
         </div>
 
