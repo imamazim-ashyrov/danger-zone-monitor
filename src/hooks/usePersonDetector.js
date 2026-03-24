@@ -3,6 +3,7 @@ import * as cocoSsd from "@tensorflow-models/coco-ssd";
 import "@tensorflow/tfjs";
 
 const PERSON_SCORE_THRESHOLD = 0.55;
+const VIDEO_WIDTH = 960;
 
 export default function usePersonDetector() {
   const detectorRef = useRef(null);
@@ -60,7 +61,15 @@ export default function usePersonDetector() {
         const predictions = await detector.detect(video);
         const persons = predictions.filter(
           (p) => p.class === "person" && p.score >= PERSON_SCORE_THRESHOLD
-        );
+        ).map(person => ({
+          ...person,
+          bbox: [
+            VIDEO_WIDTH - person.bbox[0] - person.bbox[2], // invert x
+            person.bbox[1],
+            person.bbox[2],
+            person.bbox[3]
+          ]
+        }));
 
         setDetections(persons);
 

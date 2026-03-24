@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ZoneCanvas from "./components/ZoneCanvas";
 import usePersonDetector from "./hooks/usePersonDetector";
 import {
@@ -310,7 +310,7 @@ export default function App() {
                 playsInline
                 width={VIDEO_WIDTH}
                 height={VIDEO_HEIGHT}
-                className="absolute inset-0 h-full w-full object-fill"
+                className="absolute inset-0 h-full w-full object-fill transform scale-x-[-1]"
               />
 
               <ZoneCanvas
