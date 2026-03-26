@@ -8,6 +8,7 @@ import useDeviceMode from "./hooks/useDeviceMode";
 import useStreamingChannel from "./hooks/useStreamingChannel";
 import { evaluateDanger } from "./utils/dangerEvaluator";
 import accident_signalization from "./assets/audio/accident_signalization.mp3";
+import QRCode from "qrcode";
 
 const VIDEO_WIDTH = 960;
 const VIDEO_HEIGHT = 540;
@@ -70,6 +71,8 @@ export default function App() {
   const [selectedZoneType, setSelectedZoneType] = useState("socket");
   const [isDrawingMode, setIsDrawingMode] = useState(true);
   const [roomId] = useState(resolveRoomId);
+  const [qrCodeUrl, setQrCodeUrl] = useState("");
+  const [showShareModal, setShowShareModal] = useState(false);
 
   const { isSource, isMonitor } = useDeviceMode();
 
@@ -89,7 +92,7 @@ export default function App() {
   useStreamingChannel({ roomId, mode: isSource ? "source" : "monitor" });
 
   const { sendRemoteAlert, clearRemoteAlert } = useRemoteAlerts({
-    roomId: ROOM_KEY,
+    roomId,
     isMonitorMode: isMonitor,
     onRemoteAlert: (message, timestamp) => {
       if (!message) {
@@ -115,6 +118,12 @@ export default function App() {
       stopCamera();
     };
   }, []);
+
+  useEffect(() => {
+    if (isSource) {
+      generateShareLink();
+    }
+  }, [roomId, isSource]);
 
   const handleDetections = (persons) => {
     const { danger, message } = evaluateDanger(persons, zones);
@@ -214,6 +223,31 @@ export default function App() {
     }
   };
 
+  const generateShareLink = async () => {
+    const baseUrl = window.location.origin + window.location.pathname;
+    const monitorUrl = `${baseUrl}?room=${roomId}&monitor=1`;
+
+    try {
+      const qrDataUrl = await QRCode.toDataURL(monitorUrl);
+      setQrCodeUrl(qrDataUrl);
+    } catch (error) {
+      console.error("Ошибка генерации QR:", error);
+    }
+
+    return monitorUrl;
+  };
+
+  const copyShareLink = async () => {
+    const link = await generateShareLink();
+    try {
+      await navigator.clipboard.writeText(link);
+      alert("Ссылка скопирована! Отправьте её на второе устройство.");
+    } catch (error) {
+      console.error("Ошибка копирования:", error);
+      alert("Не удалось скопировать. Ссылка: " + link);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-6">
       <div className="max-w-7xl mx-auto grid gap-6 lg:grid-cols-[1.5fr_0.9fr]">
@@ -236,6 +270,14 @@ export default function App() {
 
             <div className="mt-2 text-xs text-slate-400">
               Room ID: <span className="font-medium text-white">{roomId}</span>
+              {isSource && (
+                <button
+                  onClick={() => setShowShareModal(true)}
+                  className="ml-4 px-3 py-1 rounded-lg bg-blue-500 hover:bg-blue-400 text-white text-xs font-semibold"
+                >
+                  Поделиться комнатой
+                </button>
+              )}
             </div>
 
             <div className="mt-4 flex flex-wrap gap-3">
@@ -432,6 +474,32 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      {showShareModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full mx-4">
+            <h2 className="text-lg font-bold mb-4">Поделиться комнатой</h2>
+            <p className="text-sm text-slate-400 mb-4">
+              Сканируйте QR-код или скопируйте ссылку для подключения второго устройства в режиме мониторинга.
+            </p>
+            {qrCodeUrl && (
+              <img src={qrCodeUrl} alt="QR-код для подключения" className="mx-auto mb-4" />
+            )}
+            <button
+              onClick={copyShareLink}
+              className="w-full px-4 py-2 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold"
+            >
+              Скопировать ссылку
+            </button>
+            <button
+              onClick={() => setShowShareModal(false)}
+              className="w-full mt-2 px-4 py-2 rounded-2xl bg-slate-800 hover:bg-slate-700 text-white font-semibold"
+            >
+              Закрыть
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
