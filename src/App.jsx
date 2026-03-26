@@ -282,9 +282,17 @@ export default function App() {
 
             <div className="mt-4 flex flex-wrap gap-3">
               {isMonitor ? (
-                <span className="px-4 py-2 rounded-2xl bg-blue-500 text-white font-semibold">
-                  Monitor mode (текетүз сигнал угуп, камера жок)
-                </span>
+                <>
+                  <span className="px-4 py-2 rounded-2xl bg-blue-500 text-white font-semibold">
+                    Monitor mode (текетүз сигнал угуп, камера жок)
+                  </span>
+                  <button
+                    onClick={() => playAlertSound()}
+                    className="px-4 py-2 rounded-2xl bg-yellow-500 hover:bg-yellow-400 text-slate-950 font-semibold"
+                  >
+                    Тест звука
+                  </button>
+                </>
               ) : !isCameraOn ? (
                 <button
                   onClick={startCamera}

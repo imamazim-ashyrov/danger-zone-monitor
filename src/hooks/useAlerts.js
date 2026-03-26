@@ -29,11 +29,17 @@ export default function useAlerts({ cooldownMs = DEFAULT_ALERT_COOLDOWN_MS, soun
 
       alertAudioRef.current.play().catch((error) => {
         console.error("Audio play failed:", error);
+        // Попробуем снова после взаимодействия пользователя
+        const playOnInteraction = () => {
+          alertAudioRef.current.play().catch((err) => console.error("Retry audio play failed:", err));
+          document.removeEventListener("click", playOnInteraction);
+        };
+        document.addEventListener("click", playOnInteraction);
       });
     } catch (error) {
       console.error("Audio error:", error);
     }
-  }, []);
+  }, [soundUrl]);
 
   const addAlert = useCallback((alertItem) => {
     setAlerts((previous) => [alertItem, ...previous].slice(0, 15));
