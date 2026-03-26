@@ -15,7 +15,7 @@ import accident_signalization from "./assets/audio/accident_signalization.mp3";
 const VIDEO_WIDTH = 960;
 const VIDEO_HEIGHT = 540;
 
-const DANGER_RATIO_THRESHOLD = 0.01;
+const DANGER_RATIO_THRESHOLD = 1;
 const PROXIMITY_PX_THRESHOLD = 90;
 const PERSON_POINT_PADDING = 35;
 const ALERT_COOLDOWN_MS = 2500;
