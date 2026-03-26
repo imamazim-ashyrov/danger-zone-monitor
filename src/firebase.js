@@ -2,6 +2,7 @@
 import { initializeApp } from "firebase/app";
 import { getAnalytics } from "firebase/analytics";
 import { getDatabase } from "firebase/database";
+import { data } from "@tensorflow/tfjs";
 // TODO: Add SDKs for Firebase products that you want to use
 // https://firebase.google.com/docs/web/setup#available-libraries
 
@@ -14,6 +15,7 @@ const firebaseConfig = {
   storageBucket: "todo-app-18703.firebasestorage.app",
   messagingSenderId: "929732366019",
   appId: "1:929732366019:web:b2386d967dd4509a441c76",
+  databaseURL: "https://todo-app-18703-default-rtdb.firebaseio.com",
   measurementId: "G-LK9WGB92R9"
 };
 

@@ -1,26 +1,50 @@
-import { useEffect, useRef, useState } from "react";
+﻿import { useEffect, useRef, useState } from "react";
 import ZoneCanvas from "./components/ZoneCanvas";
 import usePersonDetector from "./hooks/usePersonDetector";
-import {
-  intersectionArea,
-  personBoxToRect,
-  rectEdgeDistance,
-  getPersonDangerPoint,
-  pointInsideRect,
-} from "./utils/geometry";
-import { db } from "./firebase";
-import { ref, set, onValue } from "firebase/database";
+import useAlerts from "./hooks/useAlerts";
+import useRemoteAlerts from "./hooks/useRemoteAlerts";
+import useZoneStorage from "./hooks/useZoneStorage";
+import useDeviceMode from "./hooks/useDeviceMode";
+import useStreamingChannel from "./hooks/useStreamingChannel";
+import { evaluateDanger } from "./utils/dangerEvaluator";
 import accident_signalization from "./assets/audio/accident_signalization.mp3";
 
 const VIDEO_WIDTH = 960;
 const VIDEO_HEIGHT = 540;
 
-const DANGER_RATIO_THRESHOLD = 1;
-const PROXIMITY_PX_THRESHOLD = 90;
-const PERSON_POINT_PADDING = 35;
-const ALERT_COOLDOWN_MS = 2500;
+const ROOM_KEY = "danger-zone-monitor-room-id";
 
-const ROOM_ID = "home-room-1";
+function resolveRoomId() {
+  const urlRoom = new URLSearchParams(window.location.search).get("room");
+  if (urlRoom) {
+    try {
+      localStorage.setItem(ROOM_KEY, urlRoom);
+    } catch (err) {
+      console.warn("Failed to save room id", err);
+    }
+    return urlRoom;
+  }
+
+  try {
+    const storedRoom = localStorage.getItem(ROOM_KEY);
+    if (storedRoom) return storedRoom;
+  } catch (err) {
+    console.warn("Failed to read room id from localStorage", err);
+  }
+
+  const generated =
+    typeof crypto?.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `room-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+
+  try {
+    localStorage.setItem(ROOM_KEY, generated);
+  } catch (err) {
+    console.warn("Failed to persist generated room id", err);
+  }
+
+  return generated;
+}
 
 const ZONE_TYPES = [
   { key: "socket", label: "Розетка" },
@@ -40,63 +64,51 @@ function formatTime(date) {
 export default function App() {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
-  const alertAudioRef = useRef(null);
-  const lastAlertRef = useRef(0);
-  const zonesRef = useRef([]);
   const activeAlertRef = useRef(null);
 
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [selectedZoneType, setSelectedZoneType] = useState("socket");
-  const [zones, setZones] = useState([]);
-  const [alerts, setAlerts] = useState([]);
-  const [activeAlert, setActiveAlert] = useState(null);
   const [isDrawingMode, setIsDrawingMode] = useState(true);
+  const [roomId] = useState(resolveRoomId);
 
-  const isMonitorMode =
-    new URLSearchParams(window.location.search).get("monitor") === "1";
+  const { isSource, isMonitor } = useDeviceMode();
 
-  const { modelStatus, detections, startDetection, stopDetection } =
-    usePersonDetector();
+  const { modelStatus, detections, startDetection, stopDetection } = usePersonDetector();
+  const { zones, addZone, removeZone, clearZones } = useZoneStorage(roomId);
+  const {
+    alerts,
+    activeAlert,
+    triggerAlert,
+    addAlert,
+    setActiveAlert,
+    clearActiveAlert,
+    playAlertSound,
+  } = useAlerts({ soundUrl: accident_signalization });
 
-  const sendRemoteAlert = async (message) => {
-    try {
-      await set(ref(db, `alerts/${ROOM_ID}`), {
-        message,
-        active: true,
-        time: Date.now(),
-      });
-    } catch (error) {
-      console.error("sendRemoteAlert error", error);
-    }
-  };
+  // Future: useStreamingChannel will handle WebRTC/streaming when implemented
+  useStreamingChannel({ roomId, mode: isSource ? "source" : "monitor" });
 
-  useEffect(() => {
-    if (!isMonitorMode) return;
-
-    const alertsRef = ref(db, `alerts/${ROOM_ID}`);
-    const unsubscribe = onValue(alertsRef, (snapshot) => {
-      const data = snapshot.val();
-      if (!data || !data.active) {
-        setActiveAlert(null);
+  const { sendRemoteAlert, clearRemoteAlert } = useRemoteAlerts({
+    roomId: ROOM_KEY,
+    isMonitorMode: isMonitor,
+    onRemoteAlert: (message, timestamp) => {
+      if (!message) {
+        clearActiveAlert();
         return;
       }
 
-      setActiveAlert(data.message);
-      setAlerts((prev) => [
-        {
-          id: `remote-${data.time}-${Math.random()}`,
-          message: data.message,
-          time: formatTime(new Date(data.time)),
-        },
-        ...prev,
-      ].slice(0, 15));
+      setActiveAlert(message);
+      addAlert({
+        id: `remote-${timestamp}-${Math.random()}`,
+        message,
+        time: formatTime(new Date(timestamp)),
+      });
       playAlertSound();
-    });
-
-    return () => {
-      unsubscribe();
-    };
-  }, [isMonitorMode]);
+    },
+    onRemoteClear: () => {
+      clearActiveAlert();
+    },
+  });
 
   useEffect(() => {
     return () => {
@@ -104,120 +116,34 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    zonesRef.current = zones;
-  }, [zones]);
+  const handleDetections = (persons) => {
+    const { danger, message } = evaluateDanger(persons, zones);
 
-  const playAlertSound = () => {
-    try {
-      if (!alertAudioRef.current) {
-        alertAudioRef.current = new Audio(accident_signalization);
-        alertAudioRef.current.preload = "auto";
+    if (!danger) {
+      clearActiveAlert();
+      activeAlertRef.current = null;
+
+      if (isSource) {
+        clearRemoteAlert();
       }
 
-      alertAudioRef.current.pause();
-      alertAudioRef.current.currentTime = 0;
-
-      alertAudioRef.current.play().catch((error) => {
-        console.error("Audio play failed:", error);
-      });
-    } catch (error) {
-      console.error("Audio error:", error);
-    }
-  };
-
-  const triggerAlert = (message, fromRemote = false) => {
-    const now = Date.now();
-
-    if (now - lastAlertRef.current < ALERT_COOLDOWN_MS) return;
-
-    lastAlertRef.current = now;
-
-    const item = {
-      id: crypto.randomUUID(),
-      message,
-      time: formatTime(new Date()),
-    };
-
-    setActiveAlert(item.message);
-    setAlerts((prev) => [item, ...prev].slice(0, 15));
-    playAlertSound();
-
-    if (!fromRemote && !isMonitorMode) {
-      sendRemoteAlert(message);
-    }
-  };
-
-  const evaluateDanger = (persons) => {
-    const currentZones = zonesRef.current;
-
-    if (!currentZones.length || !persons.length) {
-      setActiveAlert(null);
-      activeAlertRef.current = null;
       return;
     }
 
-    let foundDanger = false;
-    let nextAlertMessage = null;
+    setActiveAlert(message);
 
-    for (const person of persons) {
-      const personRect = personBoxToRect(person.bbox);
-      const personArea = personRect.width * personRect.height;
+    if (activeAlertRef.current !== message) {
+      activeAlertRef.current = message;
+      const triggered = triggerAlert(message, false);
 
-      if (personArea <= 0) continue;
-
-      const personDangerPoint = getPersonDangerPoint(personRect);
-
-      for (const zone of currentZones) {
-        const overlap = intersectionArea(personRect, zone.rect);
-        const overlapRatio = overlap / personArea;
-        const edgeDistance = rectEdgeDistance(personRect, zone.rect);
-
-        const pointNearZone = pointInsideRect(
-          personDangerPoint,
-          zone.rect,
-          PERSON_POINT_PADDING
-        );
-
-        if (
-          overlapRatio >= DANGER_RATIO_THRESHOLD ||
-          edgeDistance <= PROXIMITY_PX_THRESHOLD ||
-          pointNearZone
-        ) {
-          nextAlertMessage = `Кооптуу аймак: ${zone.label}`;
-          foundDanger = true;
-          break;
-        }
-      }
-
-      if (foundDanger) break;
-    }
-
-    if (foundDanger) {
-      setActiveAlert(nextAlertMessage);
-
-      if (activeAlertRef.current !== nextAlertMessage) {
-        activeAlertRef.current = nextAlertMessage;
-        triggerAlert(nextAlertMessage);
-      }
-    } else {
-      setActiveAlert(null);
-      activeAlertRef.current = null;
-
-      if (!isMonitorMode) {
-        set(ref(db, `alerts/${ROOM_ID}`), {
-          message: "",
-          active: false,
-          time: Date.now(),
-        }).catch((error) => {
-          console.error("clear remote alert error", error);
-        });
+      if (triggered && isSource) {
+        sendRemoteAlert(message);
       }
     }
   };
 
   const startCamera = async () => {
-    if (isMonitorMode) {
+    if (isMonitor) {
       alert("Monitor mode: camera & detection отключены.");
       return;
     }
@@ -246,7 +172,7 @@ export default function App() {
       await video.play();
 
       setIsCameraOn(true);
-      startDetection(videoRef, evaluateDanger);
+      startDetection(videoRef, handleDetections);
     } catch (error) {
       console.error(error);
       alert("Камерага уруксат берилген жок же камера ачылган жок.");
@@ -268,25 +194,24 @@ export default function App() {
       video.srcObject = null;
     }
 
-    if (alertAudioRef.current) {
-      alertAudioRef.current.pause();
-      alertAudioRef.current.currentTime = 0;
+    clearActiveAlert();
+    activeAlertRef.current = null;
+
+    if (isSource) {
+      clearRemoteAlert();
     }
 
     setIsCameraOn(false);
-    setActiveAlert(null);
-    activeAlertRef.current = null;
   };
 
-  const removeZone = (id) => {
-    setZones((prev) => prev.filter((zone) => zone.id !== id));
-  };
-
-  const clearZones = () => {
-    setZones([]);
-    zonesRef.current = [];
-    setActiveAlert(null);
+  const handleClearZones = () => {
+    clearZones();
+    clearActiveAlert();
     activeAlertRef.current = null;
+
+    if (isSource) {
+      clearRemoteAlert();
+    }
   };
 
   return (
@@ -300,8 +225,7 @@ export default function App() {
                   Danger Zone Monitor
                 </h1>
                 <p className="text-slate-400 mt-1">
-                  Камера агымынан адамды таап, кооптуу аймакка жакындаса сигнал
-                  берет.
+                  Камера агымынан адамды тап, кооптуу аймакка жакындаса сигнал берет.
                 </p>
               </div>
 
@@ -310,8 +234,12 @@ export default function App() {
               </div>
             </div>
 
+            <div className="mt-2 text-xs text-slate-400">
+              Room ID: <span className="font-medium text-white">{roomId}</span>
+            </div>
+
             <div className="mt-4 flex flex-wrap gap-3">
-              {isMonitorMode ? (
+              {isMonitor ? (
                 <span className="px-4 py-2 rounded-2xl bg-blue-500 text-white font-semibold">
                   Monitor mode (текетүз сигнал угуп, камера жок)
                 </span>
@@ -343,7 +271,7 @@ export default function App() {
               </button>
 
               <button
-                onClick={clearZones}
+                onClick={handleClearZones}
                 className="px-4 py-2 rounded-2xl bg-slate-800 hover:bg-slate-700 border border-slate-700 font-semibold"
               >
                 Бардык зоналарды тазалоо
@@ -372,7 +300,7 @@ export default function App() {
               </span>
             </div>
 
-            {isMonitorMode ? (
+            {isMonitor ? (
               <div className="relative aspect-video w-full overflow-hidden rounded-3xl bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-400">
                 Монитор режим: видео агым жок, детекция жок. Текетүз Firebaseдан сигналдарды угат.
               </div>
@@ -393,7 +321,7 @@ export default function App() {
                   detections={detections}
                   isDrawingMode={isDrawingMode}
                   selectedZoneType={selectedZoneType}
-                  onAddZone={(zone) => setZones((prev) => [...prev, zone])}
+                  onAddZone={addZone}
                   zoneTypes={ZONE_TYPES}
                 />
               </div>
@@ -408,9 +336,7 @@ export default function App() {
             <div className="mt-3 space-y-3">
               <div className="rounded-2xl border border-slate-800 bg-slate-950 p-3">
                 <div className="text-sm text-slate-400">Табылган адамдар</div>
-                <div className="text-2xl font-bold mt-1">
-                  {detections.length}
-                </div>
+                <div className="text-2xl font-bold mt-1">{detections.length}</div>
               </div>
 
               <div className="rounded-2xl border border-slate-800 bg-slate-950 p-3">
@@ -453,9 +379,7 @@ export default function App() {
                         {idx + 1}. {zone.label}
                       </div>
                       <div className="text-xs text-slate-400 mt-1">
-                        x:{Math.round(zone.rect.x)} y:{Math.round(zone.rect.y)} w:
-                        {Math.round(zone.rect.width)} h:
-                        {Math.round(zone.rect.height)}
+                        x:{Math.round(zone.rect.x)} y:{Math.round(zone.rect.y)} w:{Math.round(zone.rect.width)} h:{Math.round(zone.rect.height)}
                       </div>
                     </div>
 
@@ -487,9 +411,7 @@ export default function App() {
                     className="rounded-2xl border border-rose-800 bg-rose-900/20 p-3"
                   >
                     <div className="font-semibold">{item.message}</div>
-                    <div className="text-xs text-slate-400 mt-1">
-                      {item.time}
-                    </div>
+                    <div className="text-xs text-slate-400 mt-1">{item.time}</div>
                   </div>
                 ))
               )}

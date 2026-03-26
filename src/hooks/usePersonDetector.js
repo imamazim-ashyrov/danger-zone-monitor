@@ -4,10 +4,13 @@ import "@tensorflow/tfjs";
 
 const PERSON_SCORE_THRESHOLD = 0.55;
 const VIDEO_WIDTH = 960;
+const DETECTION_FRAME_SKIP = 2; // Run detection every 2 frames (~33ms at 60fps)
 
 export default function usePersonDetector() {
   const detectorRef = useRef(null);
   const rafRef = useRef(null);
+  const frameCountRef = useRef(0);
+  const isDetectingRef = useRef(false);
 
   const [modelStatus, setModelStatus] = useState("Модель жүктөлгөн жок");
   const [detections, setDetections] = useState([]);
@@ -42,6 +45,9 @@ export default function usePersonDetector() {
   }, []);
 
   const startDetection = useCallback((videoRef, onDetect) => {
+    frameCountRef.current = 0;
+    isDetectingRef.current = false;
+
     const detectFrame = async () => {
       const video = videoRef.current;
       const detector = detectorRef.current;
@@ -56,6 +62,16 @@ export default function usePersonDetector() {
         rafRef.current = requestAnimationFrame(detectFrame);
         return;
       }
+
+      frameCountRef.current++;
+
+      // Skip frames to reduce load + prevent overlapping detections
+      if (frameCountRef.current % DETECTION_FRAME_SKIP !== 0 || isDetectingRef.current) {
+        rafRef.current = requestAnimationFrame(detectFrame);
+        return;
+      }
+
+      isDetectingRef.current = true;
 
       try {
         const predictions = await detector.detect(video);
@@ -78,6 +94,8 @@ export default function usePersonDetector() {
         }
       } catch (error) {
         console.error("Detection error:", error);
+      } finally {
+        isDetectingRef.current = false;
       }
 
       rafRef.current = requestAnimationFrame(detectFrame);
@@ -95,6 +113,8 @@ export default function usePersonDetector() {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     }
+    frameCountRef.current = 0;
+    isDetectingRef.current = false;
     setDetections([]);
   }, []);
 
