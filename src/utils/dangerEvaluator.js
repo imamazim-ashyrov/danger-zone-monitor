@@ -6,9 +6,9 @@ import {
   pointInsideRect,
 } from "./geometry";
 
-const DANGER_RATIO_THRESHOLD = 1;
-const PROXIMITY_PX_THRESHOLD = 90;
-const PERSON_POINT_PADDING = 35;
+const DANGER_RATIO_THRESHOLD = 0.03;
+const PROXIMITY_PX_THRESHOLD = 60;
+const PERSON_POINT_PADDING = 20;
 
 export function evaluateDanger(persons, zones) {
   if (!zones || !zones.length || !persons || !persons.length) {

@@ -2,6 +2,7 @@
 import ZoneCanvas from "./components/ZoneCanvas";
 import usePersonDetector from "./hooks/usePersonDetector";
 import useAlerts from "./hooks/useAlerts";
+import useDangerConfirmation from "./hooks/useDangerConfirmation";
 import useRemoteAlerts from "./hooks/useRemoteAlerts";
 import useZoneStorage from "./hooks/useZoneStorage";
 import useDeviceMode from "./hooks/useDeviceMode";
@@ -78,6 +79,12 @@ export default function App() {
 
   const { modelStatus, detections, startDetection, stopDetection } = usePersonDetector();
   const { zones, addZone, removeZone, clearZones } = useZoneStorage(roomId);
+  const zonesRef = useRef(zones);
+
+  useEffect(() => {
+    zonesRef.current = zones;
+  }, [zones]);
+
   const {
     alerts,
     activeAlert,
@@ -113,6 +120,30 @@ export default function App() {
     },
   });
 
+  const processDetections = useDangerConfirmation({
+    evaluateDanger,
+    onDangerConfirmed: ({ message }) => {
+      setActiveAlert(message);
+
+      if (activeAlertRef.current !== message) {
+        activeAlertRef.current = message;
+        const triggered = triggerAlert(message, false);
+
+        if (triggered && isSource) {
+          sendRemoteAlert(message);
+        }
+      }
+    },
+    onDangerCleared: () => {
+      clearActiveAlert();
+      activeAlertRef.current = null;
+
+      if (isSource) {
+        clearRemoteAlert();
+      }
+    },
+  });
+
   useEffect(() => {
     return () => {
       stopCamera();
@@ -126,29 +157,7 @@ export default function App() {
   }, [roomId, isSource]);
 
   const handleDetections = (persons) => {
-    const { danger, message } = evaluateDanger(persons, zones);
-
-    if (!danger) {
-      clearActiveAlert();
-      activeAlertRef.current = null;
-
-      if (isSource) {
-        clearRemoteAlert();
-      }
-
-      return;
-    }
-
-    setActiveAlert(message);
-
-    if (activeAlertRef.current !== message) {
-      activeAlertRef.current = message;
-      const triggered = triggerAlert(message, false);
-
-      if (triggered && isSource) {
-        sendRemoteAlert(message);
-      }
-    }
+    processDetections(persons, zonesRef.current);
   };
 
   const startCamera = async () => {
